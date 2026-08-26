@@ -5,7 +5,6 @@ const STORAGE_KEYS = {
   USERS: 'counter_users',
   SYSTEMS: 'counter_systems',
   RECORDS: 'counter_records',
-  BACKEND_URL: 'counter_backend_url',
 };
 
 export const DEFAULT_USERS: UserProfile[] = [
@@ -14,30 +13,6 @@ export const DEFAULT_USERS: UserProfile[] = [
   { id: 3, name: 'Usuario 3' },
   { id: 4, name: 'Usuario 4' },
   { id: 5, name: 'Usuario 5' },
-];
-
-export const DEFAULT_SYSTEMS: SimulationSystem[] = [
-  {
-    id: 'sys-default-1',
-    name: 'Caja de Cobro - Supermercado',
-    description: 'Medición de cola y atención en caja tradicional',
-    createdAt: new Date().toISOString(),
-    processes: [
-      { id: 'proc-1', order: 1, name: 'Espera en Cola' },
-      { id: 'proc-2', order: 2, name: 'Escaneo de Productos' },
-      { id: 'proc-3', order: 3, name: 'Pago y Facturación' },
-    ],
-  },
-  {
-    id: 'sys-default-2',
-    name: 'Ventanilla de Banco',
-    description: 'Medición de espera en sala y atención de trámite',
-    createdAt: new Date().toISOString(),
-    processes: [
-      { id: 'proc-1', order: 1, name: 'Espera en Sala' },
-      { id: 'proc-2', order: 2, name: 'Atención de Operación' },
-    ],
-  },
 ];
 
 export const LocalStore = {
@@ -59,7 +34,7 @@ export const LocalStore = {
   getUsers(): UserProfile[] {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.USERS);
-      if (raw) {
+      if (raw !== null) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
@@ -77,14 +52,15 @@ export const LocalStore = {
   getSystems(): SimulationSystem[] {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.SYSTEMS);
-      if (raw) {
+      if (raw !== null) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed; // Allow empty array if user deleted all systems
       }
     } catch (e) {
       console.error('Error reading systems from localStorage:', e);
     }
-    return DEFAULT_SYSTEMS;
+    // Return empty list if nothing stored yet
+    return [];
   },
 
   saveSystems(systems: SimulationSystem[]) {
@@ -95,7 +71,7 @@ export const LocalStore = {
   getRecords(): SampleRecord[] {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.RECORDS);
-      if (raw) {
+      if (raw !== null) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) return parsed;
       }
@@ -111,7 +87,7 @@ export const LocalStore = {
 
   addRecord(record: SampleRecord) {
     const existing = this.getRecords();
-    const updated = [record, ...existing];
+    const updated = [record, ...existing.filter((r) => r.id !== record.id)];
     this.saveRecords(updated);
     return updated;
   },
@@ -121,14 +97,5 @@ export const LocalStore = {
     const updated = existing.filter((r) => r.id !== id);
     this.saveRecords(updated);
     return updated;
-  },
-
-  // Backend Custom URL configuration
-  getBackendUrl(): string {
-    return localStorage.getItem(STORAGE_KEYS.BACKEND_URL) || (import.meta.env.VITE_API_URL || '');
-  },
-
-  setBackendUrl(url: string) {
-    localStorage.setItem(STORAGE_KEYS.BACKEND_URL, url.trim());
   },
 };

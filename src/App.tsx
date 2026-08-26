@@ -62,19 +62,43 @@ export const App: React.FC = () => {
     // 2. Fetch Systems
     const fetchedSystems = await ApiClient.getSystems();
     setSystems(fetchedSystems);
-    if (fetchedSystems.length > 0 && !selectedSystemId) {
-      setSelectedSystemId(fetchedSystems[0].id);
+    if (fetchedSystems.length > 0) {
+      setSelectedSystemId((prev) => (prev && fetchedSystems.some((s) => s.id === prev) ? prev : fetchedSystems[0].id));
     }
 
     // 3. Fetch Records
     const fetchedRecords = await ApiClient.getRecords();
     setRecords(fetchedRecords);
-  }, [selectedSystemId]);
+  }, []);
 
   useEffect(() => {
     handleCheckBackend();
     loadAllData();
   }, [handleCheckBackend, loadAllData]);
+
+  // Realtime subscription setup
+  useEffect(() => {
+    const unsubscribe = ApiClient.subscribeToRealtime(
+      (newRecord) => {
+        setRecords((prev) => [newRecord, ...prev.filter((r) => r.id !== newRecord.id)]);
+      },
+      (deletedId) => {
+        setRecords((prev) => prev.filter((r) => r.id !== deletedId));
+      },
+      async () => {
+        const updated = await ApiClient.getSystems();
+        setSystems(updated);
+      },
+      async () => {
+        const updated = await ApiClient.getUsers();
+        setUsers(updated);
+      }
+    );
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   // Handler: Select User
   const handleSelectUser = (user: UserProfile) => {
@@ -113,18 +137,20 @@ export const App: React.FC = () => {
     processes: { name: string; order: number }[];
   }) => {
     const created = await ApiClient.createSystem(systemData);
-    setSystems((prev) => [...prev, created]);
+    setSystems((prev) => [...prev.filter((s) => s.id !== created.id), created]);
     setSelectedSystemId(created.id);
   };
 
   // Handler: Delete System
   const handleDeleteSystem = async (id: string) => {
     await ApiClient.deleteSystem(id);
-    setSystems((prev) => prev.filter((s) => s.id !== id));
-    if (selectedSystemId === id && systems.length > 1) {
-      const remaining = systems.filter((s) => s.id !== id);
-      if (remaining.length > 0) setSelectedSystemId(remaining[0].id);
-    }
+    setSystems((prev) => {
+      const remaining = prev.filter((s) => s.id !== id);
+      if (selectedSystemId === id) {
+        setSelectedSystemId(remaining.length > 0 ? remaining[0].id : '');
+      }
+      return remaining;
+    });
   };
 
   // Handler: Select System and Jump to Timer
@@ -185,7 +211,7 @@ export const App: React.FC = () => {
       <footer className="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <div>SimuTimer — Medición de Tiempos en Sistemas de Colas & Procesos</div>
-          <div className="text-slate-400">Diseñado para trabajo de campo en simultáneo</div>
+          <div className="text-slate-400">Sincronización multiusuario en tiempo real</div>
         </div>
       </footer>
 
@@ -207,7 +233,7 @@ export const App: React.FC = () => {
         onClose={() => setIsUserSettingsOpen(false)}
       />
 
-      {/* Backend Status & Ping Modal */}
+      {/* Supabase Status & Connection Modal */}
       <BackendStatusModal
         isOpen={isBackendStatusOpen}
         onClose={() => setIsBackendStatusOpen(false)}

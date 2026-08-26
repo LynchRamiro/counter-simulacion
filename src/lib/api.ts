@@ -1,230 +1,321 @@
 import { UserProfile, SimulationSystem, SampleRecord, BackendStatus } from '../types';
 import { LocalStore } from './storage';
-
-function getBaseApiUrl(): string {
-  const customUrl = LocalStore.getBackendUrl();
-  if (customUrl) return customUrl.replace(/\/$/, '');
-  return '';
-}
+import { getSupabaseClient } from './supabase';
 
 export const ApiClient = {
   /**
-   * Health check / Ping flag endpoint for Render
+   * Health check / Ping test for Supabase or Local
    */
   async checkHealth(): Promise<{ status: BackendStatus; latencyMs?: number; message?: string }> {
+    const client = getSupabaseClient();
+    if (!client) {
+      return {
+        status: 'offline',
+        message: 'Modo local (Configura Supabase para sincronizar entre dispositivos)',
+      };
+    }
+
     const start = performance.now();
-    const baseUrl = getBaseApiUrl();
-    const url = baseUrl ? `${baseUrl}/api/health` : '/api/health';
-
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
-
-      const res = await fetch(url, {
-        method: 'GET',
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-
+      const { error } = await client.from('users').select('id', { count: 'exact', head: true });
       const latencyMs = Math.round(performance.now() - start);
 
-      if (res.ok) {
-        const data = await res.json();
-        return {
-          status: 'online',
-          latencyMs,
-          message: data.message || 'Servidor activo',
-        };
-      } else {
+      if (error) {
         return {
           status: 'offline',
           latencyMs,
-          message: `Error HTTP ${res.status}`,
+          message: `Error al conectar con Supabase: ${error.message}`,
         };
       }
+
+      return {
+        status: 'online',
+        latencyMs,
+        message: 'Conectado exitosamente a Supabase Cloud (PostgreSQL)',
+      };
     } catch (err: any) {
-      // If it aborted due to timeout, it's likely sleeping on Render free tier
-      if (err.name === 'AbortError') {
-        return {
-          status: 'sleeping',
-          message: 'El servidor está despertando (Render)...',
-        };
-      }
       return {
         status: 'offline',
-        message: 'No se pudo conectar con el backend (usando almacenamiento local)',
+        message: `Error de red: ${err.message || 'Sin conexión'}`,
       };
     }
   },
 
-  // USERS
+  // ================= USERS =================
   async getUsers(): Promise<UserProfile[]> {
-    const baseUrl = getBaseApiUrl();
-    const url = baseUrl ? `${baseUrl}/api/users` : '/api/users';
-    try {
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        LocalStore.saveUsers(data);
-        return data;
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { data, error } = await client.from('users').select('*').order('id', { ascending: true });
+        if (!error && data && data.length > 0) {
+          const formatted: UserProfile[] = data.map((u: any) => ({
+            id: u.id,
+            name: u.name,
+          }));
+          LocalStore.saveUsers(formatted);
+          return formatted;
+        }
+      } catch (e) {
+        console.error('Error fetching users from Supabase:', e);
       }
-    } catch {
-      // Fallback
     }
     return LocalStore.getUsers();
   },
 
   async updateUsers(users: UserProfile[]): Promise<UserProfile[]> {
     LocalStore.saveUsers(users);
-    const baseUrl = getBaseApiUrl();
-    const url = baseUrl ? `${baseUrl}/api/users` : '/api/users';
-    try {
-      const res = await fetch(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ users }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        LocalStore.saveUsers(data);
-        return data;
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const upsertPayload = users.map((u) => ({
+          id: u.id,
+          name: u.name,
+        }));
+        await client.from('users').upsert(upsertPayload);
+      } catch (e) {
+        console.error('Error updating users in Supabase:', e);
       }
-    } catch {
-      // Fallback already saved locally
     }
     return users;
   },
 
-  // SYSTEMS
+  // ================= SYSTEMS =================
   async getSystems(): Promise<SimulationSystem[]> {
-    const baseUrl = getBaseApiUrl();
-    const url = baseUrl ? `${baseUrl}/api/systems` : '/api/systems';
-    try {
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        LocalStore.saveSystems(data);
-        return data;
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { data, error } = await client
+          .from('systems')
+          .select('*')
+          .order('created_at', { ascending: true });
+        if (!error && data) {
+          const formatted: SimulationSystem[] = data.map((s: any) => ({
+            id: s.id,
+            name: s.name,
+            description: s.description || '',
+            processes: s.processes || [],
+            createdAt: s.created_at || new Date().toISOString(),
+          }));
+          LocalStore.saveSystems(formatted);
+          return formatted;
+        }
+      } catch (e) {
+        console.error('Error fetching systems from Supabase:', e);
       }
-    } catch {
-      // Fallback
     }
     return LocalStore.getSystems();
   },
 
-  async createSystem(system: { name: string; description?: string; processes: { name: string; order: number }[] }): Promise<SimulationSystem> {
-    const baseUrl = getBaseApiUrl();
-    const url = baseUrl ? `${baseUrl}/api/systems` : '/api/systems';
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(system),
-      });
-      if (res.ok) {
-        const created = await res.json();
-        const existing = LocalStore.getSystems();
-        LocalStore.saveSystems([...existing, created]);
-        return created;
-      }
-    } catch {
-      // Fallback local creation
-    }
-
-    const localNewSystem: SimulationSystem = {
+  async createSystem(system: {
+    name: string;
+    description?: string;
+    processes: { name: string; order: number }[];
+  }): Promise<SimulationSystem> {
+    const newSystem: SimulationSystem = {
       id: `sys-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      name: system.name,
-      description: system.description,
+      name: system.name.trim(),
+      description: (system.description || '').trim(),
       createdAt: new Date().toISOString(),
       processes: system.processes.map((p, idx) => ({
         id: `proc-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`,
         order: p.order,
-        name: p.name,
+        name: p.name.trim(),
       })),
     };
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { error } = await client.from('systems').insert({
+          id: newSystem.id,
+          name: newSystem.name,
+          description: newSystem.description,
+          processes: newSystem.processes,
+          created_at: newSystem.createdAt,
+        });
+        if (error) {
+          console.error('Error inserting system into Supabase:', error);
+        }
+      } catch (e) {
+        console.error('Error inserting system into Supabase:', e);
+      }
+    }
+
     const existing = LocalStore.getSystems();
-    LocalStore.saveSystems([...existing, localNewSystem]);
-    return localNewSystem;
+    LocalStore.saveSystems([...existing.filter((s) => s.id !== newSystem.id), newSystem]);
+    return newSystem;
   },
 
   async deleteSystem(id: string): Promise<boolean> {
-    const baseUrl = getBaseApiUrl();
-    const url = baseUrl ? `${baseUrl}/api/systems/${id}` : `/api/systems/${id}`;
-    let backendSuccess = false;
-    try {
-      const res = await fetch(url, { method: 'DELETE' });
-      backendSuccess = res.ok;
-    } catch {
-      // Offline fallback
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { error } = await client.from('systems').delete().eq('id', id);
+        if (error) {
+          console.error('Error deleting system in Supabase:', error);
+        }
+      } catch (e) {
+        console.error('Error deleting system in Supabase:', e);
+      }
     }
 
     const existing = LocalStore.getSystems();
     LocalStore.saveSystems(existing.filter((s) => s.id !== id));
-    return backendSuccess || true;
+    return true;
   },
 
-  // RECORDS
+  // ================= RECORDS =================
   async getRecords(systemId?: string): Promise<SampleRecord[]> {
-    const baseUrl = getBaseApiUrl();
-    const url = baseUrl
-      ? `${baseUrl}/api/records${systemId ? `?systemId=${systemId}` : ''}`
-      : `/api/records${systemId ? `?systemId=${systemId}` : ''}`;
-    try {
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        // If query wasn't filtered, save all locally
-        if (!systemId) {
-          LocalStore.saveRecords(data);
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        let query = client.from('records').select('*').order('timestamp', { ascending: false });
+        if (systemId && systemId !== 'ALL') {
+          query = query.eq('system_id', systemId);
         }
-        return data;
+
+        const { data, error } = await query;
+        if (!error && data) {
+          const formatted: SampleRecord[] = data.map((r: any) => ({
+            id: r.id,
+            systemId: r.system_id,
+            systemName: r.system_name,
+            userId: r.user_id,
+            userName: r.user_name,
+            timestamp: r.timestamp,
+            processTimes: r.process_times || [],
+            totalSystemTimeSeconds: Number(r.total_system_time_seconds),
+            notes: r.notes || '',
+          }));
+
+          if (!systemId || systemId === 'ALL') {
+            LocalStore.saveRecords(formatted);
+          }
+          return formatted;
+        }
+      } catch (e) {
+        console.error('Error fetching records from Supabase:', e);
       }
-    } catch {
-      // Fallback
     }
+
     const localRecords = LocalStore.getRecords();
-    return systemId ? localRecords.filter((r) => r.systemId === systemId) : localRecords;
+    return systemId && systemId !== 'ALL'
+      ? localRecords.filter((r) => r.systemId === systemId)
+      : localRecords;
   },
 
   async createRecord(record: Omit<SampleRecord, 'id'>): Promise<SampleRecord> {
-    const baseUrl = getBaseApiUrl();
-    const url = baseUrl ? `${baseUrl}/api/records` : '/api/records';
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(record),
-      });
-      if (res.ok) {
-        const created = await res.json();
-        LocalStore.addRecord(created);
-        return created;
-      }
-    } catch {
-      // Fallback local record
-    }
-
-    const localRecord: SampleRecord = {
+    const newRecord: SampleRecord = {
       ...record,
       id: `rec-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       timestamp: record.timestamp || new Date().toISOString(),
     };
-    LocalStore.addRecord(localRecord);
-    return localRecord;
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { error } = await client.from('records').insert({
+          id: newRecord.id,
+          system_id: newRecord.systemId,
+          system_name: newRecord.systemName,
+          user_id: newRecord.userId,
+          user_name: newRecord.userName,
+          timestamp: newRecord.timestamp,
+          process_times: newRecord.processTimes,
+          total_system_time_seconds: newRecord.totalSystemTimeSeconds,
+          notes: newRecord.notes || '',
+        });
+        if (error) {
+          console.error('Error inserting record into Supabase:', error);
+        }
+      } catch (e) {
+        console.error('Error inserting record into Supabase:', e);
+      }
+    }
+
+    LocalStore.addRecord(newRecord);
+    return newRecord;
   },
 
   async deleteRecord(id: string): Promise<boolean> {
-    const baseUrl = getBaseApiUrl();
-    const url = baseUrl ? `${baseUrl}/api/records/${id}` : `/api/records/${id}`;
-    let backendSuccess = false;
-    try {
-      const res = await fetch(url, { method: 'DELETE' });
-      backendSuccess = res.ok;
-    } catch {
-      // Fallback
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { error } = await client.from('records').delete().eq('id', id);
+        if (error) {
+          console.error('Error deleting record from Supabase:', error);
+        }
+      } catch (e) {
+        console.error('Error deleting record from Supabase:', e);
+      }
     }
 
     LocalStore.deleteRecord(id);
-    return backendSuccess || true;
+    return true;
+  },
+
+  /**
+   * Realtime WebSockets listener across all 5 devices!
+   */
+  subscribeToRealtime(
+    onRecordInsert: (newRecord: SampleRecord) => void,
+    onRecordDelete: (deletedId: string) => void,
+    onSystemChange: () => void,
+    onUsersChange: () => void
+  ) {
+    const client = getSupabaseClient();
+    if (!client) return () => {};
+
+    const channel = client
+      .channel('simutimer-realtime')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'records' },
+        (payload) => {
+          const r: any = payload.new;
+          if (r && r.id) {
+            onRecordInsert({
+              id: r.id,
+              systemId: r.system_id,
+              systemName: r.system_name,
+              userId: r.user_id,
+              userName: r.user_name,
+              timestamp: r.timestamp,
+              processTimes: r.process_times || [],
+              totalSystemTimeSeconds: Number(r.total_system_time_seconds),
+              notes: r.notes || '',
+            });
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'records' },
+        (payload) => {
+          const old: any = payload.old;
+          if (old && old.id) {
+            onRecordDelete(old.id);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'systems' },
+        () => {
+          onSystemChange();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'users' },
+        () => {
+          onUsersChange();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      client.removeChannel(channel);
+    };
   },
 };

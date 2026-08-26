@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Timer, ClipboardList, Settings2, User, Users, RefreshCw } from 'lucide-react';
+import { Timer, ClipboardList, Settings2, User, Users, RefreshCw, Database } from 'lucide-react';
 import { UserProfile, BackendStatus } from '../types';
 
 interface NavbarProps {
@@ -50,7 +50,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   Colas & Procesos
                 </span>
               </div>
-              <p className="text-xs text-slate-500 hidden sm:block">Toma de tiempos de campo en simultáneo</p>
+              <p className="text-xs text-slate-500 hidden sm:block">Toma de tiempos en simultáneo para Simulación</p>
             </div>
           </div>
 
@@ -93,39 +93,32 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Right Action Area */}
           <div className="flex items-center space-x-2">
-            {/* Backend Health Check Pill */}
+            {/* Supabase Status Pill */}
             <div
               onClick={onOpenBackendSettings}
               className={`group flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs font-medium border cursor-pointer transition-all ${
                 backendStatus === 'online'
                   ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
-                  : backendStatus === 'sleeping'
-                  ? 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100 animate-pulse'
-                  : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                  : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
               }`}
-              title="Click para ver configuración del servidor y comprobar conexión"
+              title="Click para ver configuración de base de datos Supabase"
             >
               <span
                 className={`w-2 h-2 rounded-full ${
-                  backendStatus === 'online'
-                    ? 'bg-emerald-500'
-                    : backendStatus === 'sleeping'
-                    ? 'bg-amber-500 animate-ping'
-                    : 'bg-slate-400'
+                  backendStatus === 'online' ? 'bg-emerald-500' : 'bg-amber-500'
                 }`}
               />
+              <Database className="w-3 h-3 text-slate-500" />
               <span className="hidden sm:inline">
                 {backendStatus === 'online'
-                  ? `Servidor OK${backendLatency ? ` (${backendLatency}ms)` : ''}`
-                  : backendStatus === 'sleeping'
-                  ? 'Despertando Backend...'
+                  ? `Supabase Cloud${backendLatency !== undefined ? ` (${backendLatency}ms)` : ''}`
                   : 'Modo Local'}
               </span>
               <button
                 onClick={handlePing}
                 disabled={isPinging}
                 className="p-0.5 hover:bg-white/60 rounded text-slate-600 hover:text-slate-900"
-                title="Comprobar estado del backend"
+                title="Comprobar conexión"
               >
                 <RefreshCw className={`w-3 h-3 ${isPinging ? 'animate-spin text-blue-600' : ''}`} />
               </button>
