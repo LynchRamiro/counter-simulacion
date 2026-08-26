@@ -98,4 +98,12 @@ export const LocalStore = {
     this.saveRecords(updated);
     return updated;
   },
+
+  deleteRecords(ids: string[]) {
+    const idSet = new Set(ids);
+    const existing = this.getRecords();
+    const updated = existing.filter((r) => !idSet.has(r.id));
+    this.saveRecords(updated);
+    return updated;
+  },
 };

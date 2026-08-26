@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Download, Trash2, Filter, RefreshCw, ClipboardList, Clock } from 'lucide-react';
+import { Download, Trash2, Filter, RefreshCw, ClipboardList, Clock, CheckSquare, Square, MinusSquare, AlertTriangle } from 'lucide-react';
 import { SampleRecord, SimulationSystem, UserProfile } from '../types';
 import { formatDateTime, formatDuration } from '../lib/formatters';
 import { exportRecordsToCSV } from '../lib/exportUtils';
@@ -8,7 +8,7 @@ interface RecordsPanelProps {
   records: SampleRecord[];
   systems: SimulationSystem[];
   users: UserProfile[];
-  onDeleteRecord: (id: string) => Promise<void>;
+  onDeleteRecords: (ids: string[]) => Promise<void>;
   onRefresh: () => Promise<void>;
 }
 
@@ -16,14 +16,17 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   records,
   systems,
   users,
-  onDeleteRecord,
+  onDeleteRecords,
   onRefresh,
 }) => {
   const [selectedSystemFilter, setSelectedSystemFilter] = useState<string>('ALL');
   const [selectedUserFilter, setSelectedUserFilter] = useState<string>('ALL');
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [recordToDelete, setRecordToDelete] = useState<SampleRecord | null>(null);
+
+  // Multi-selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [idsToDelete, setIdsToDelete] = useState<string[]>([]);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Filtered records
   const filteredRecords = useMemo(() => {
@@ -53,6 +56,34 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
     return Array.from(set);
   }, [currentFilteredSystem, filteredRecords]);
 
+  // Selection helpers
+  const allFilteredSelected = filteredRecords.length > 0 && filteredRecords.every((r) => selectedIds.has(r.id));
+  const someFilteredSelected = filteredRecords.some((r) => selectedIds.has(r.id)) && !allFilteredSelected;
+
+  const handleToggleSelectAll = () => {
+    if (allFilteredSelected) {
+      // Unselect all currently filtered
+      const next = new Set(selectedIds);
+      filteredRecords.forEach((r) => next.delete(r.id));
+      setSelectedIds(next);
+    } else {
+      // Select all currently filtered
+      const next = new Set(selectedIds);
+      filteredRecords.forEach((r) => next.add(r.id));
+      setSelectedIds(next);
+    }
+  };
+
+  const handleToggleRow = (id: string) => {
+    const next = new Set(selectedIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    setSelectedIds(next);
+  };
+
   const handleRefreshClick = async () => {
     setIsRefreshing(true);
     await onRefresh();
@@ -60,15 +91,23 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   };
 
   const handleConfirmDelete = async () => {
-    if (!recordToDelete) return;
-    setDeletingId(recordToDelete.id);
-    await onDeleteRecord(recordToDelete.id);
-    setDeletingId(null);
-    setRecordToDelete(null);
+    if (idsToDelete.length === 0) return;
+    setIsDeleting(true);
+    await onDeleteRecords(idsToDelete);
+    // Clear selection for deleted IDs
+    const next = new Set(selectedIds);
+    idsToDelete.forEach((id) => next.delete(id));
+    setSelectedIds(next);
+    setIsDeleting(false);
+    setIdsToDelete([]);
   };
 
   const handleExport = () => {
-    exportRecordsToCSV(filteredRecords, currentFilteredSystem?.name);
+    // If some records are selected, export selected; otherwise export all filtered
+    const toExport = selectedIds.size > 0
+      ? filteredRecords.filter((r) => selectedIds.has(r.id))
+      : filteredRecords;
+    exportRecordsToCSV(toExport, currentFilteredSystem?.name);
   };
 
   return (
@@ -113,6 +152,17 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
 
         {/* Action Buttons */}
         <div className="flex items-center space-x-2 shrink-0">
+          {/* Bulk Delete Button when items are selected */}
+          {selectedIds.size > 0 && (
+            <button
+              onClick={() => setIdsToDelete(Array.from(selectedIds))}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold shadow-sm transition-all animate-in fade-in"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Eliminar ({selectedIds.size})</span>
+            </button>
+          )}
+
           <button
             onClick={handleRefreshClick}
             disabled={isRefreshing}
@@ -120,7 +170,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             title="Recargar datos del servidor"
           >
             <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-blue-600' : ''}`} />
-            <span>Actualizar</span>
+            <span className="hidden sm:inline">Actualizar</span>
           </button>
 
           <button
@@ -129,10 +179,28 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Download className="w-4 h-4" />
-            <span>Exportar CSV (Excel)</span>
+            <span>
+              {selectedIds.size > 0 ? `Exportar (${selectedIds.size}) CSV` : 'Exportar CSV'}
+            </span>
           </button>
         </div>
       </div>
+
+      {/* Bulk selection info banner if items selected */}
+      {selectedIds.size > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-blue-900 animate-in fade-in">
+          <div className="flex items-center space-x-2">
+            <span className="font-bold">{selectedIds.size}</span>
+            <span>{selectedIds.size === 1 ? 'muestra seleccionada' : 'muestras seleccionadas'}</span>
+          </div>
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="font-semibold text-blue-700 hover:text-blue-900 underline"
+          >
+            Deseleccionar todo
+          </button>
+        </div>
+      )}
 
       {/* Main Records Table Card */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -151,7 +219,24 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="bg-slate-100/90 text-slate-600 text-xs font-bold uppercase tracking-wider border-b border-slate-200">
-                  <th className="py-3 px-4"># / ID</th>
+                  {/* Select All Checkbox */}
+                  <th className="py-3 px-3 w-10 text-center">
+                    <button
+                      type="button"
+                      onClick={handleToggleSelectAll}
+                      className="p-1 text-slate-500 hover:text-blue-600 rounded transition-colors flex items-center justify-center mx-auto"
+                      title={allFilteredSelected ? 'Deseleccionar todos' : 'Seleccionar todos'}
+                    >
+                      {allFilteredSelected ? (
+                        <CheckSquare className="w-4 h-4 text-blue-600" />
+                      ) : someFilteredSelected ? (
+                        <MinusSquare className="w-4 h-4 text-blue-600" />
+                      ) : (
+                        <Square className="w-4 h-4 text-slate-400" />
+                      )}
+                    </button>
+                  </th>
+                  <th className="py-3 px-3"># / ID</th>
                   <th className="py-3 px-4">Fecha y Hora</th>
                   <th className="py-3 px-4">Sistema</th>
                   <th className="py-3 px-4">Usuario</th>
@@ -166,13 +251,31 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100 text-slate-800">
                 {filteredRecords.map((record, index) => {
+                  const isSelected = selectedIds.has(record.id);
                   return (
                     <tr
                       key={record.id}
-                      className="hover:bg-blue-50/40 transition-colors group"
+                      className={`transition-colors group ${
+                        isSelected ? 'bg-blue-50/70' : 'hover:bg-slate-50/80'
+                      }`}
                     >
+                      {/* Checkbox */}
+                      <td className="py-3 px-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleRow(record.id)}
+                          className="p-1 text-slate-500 hover:text-blue-600 rounded transition-colors flex items-center justify-center mx-auto"
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4 text-blue-600" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-300 group-hover:text-slate-400" />
+                          )}
+                        </button>
+                      </td>
+
                       {/* ID / Row Number */}
-                      <td className="py-3 px-4 font-mono text-xs text-slate-500 font-semibold">
+                      <td className="py-3 px-3 font-mono text-xs text-slate-500 font-semibold">
                         <span className="text-slate-400 mr-1.5">{filteredRecords.length - index}.</span>
                         <span title={record.id}>{record.id.slice(-7)}</span>
                       </td>
@@ -221,11 +324,10 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                         </div>
                       </td>
 
-                      {/* Delete action */}
+                      {/* Delete action (Single) */}
                       <td className="py-3 px-4 text-center">
                         <button
-                          onClick={() => setRecordToDelete(record)}
-                          disabled={deletingId === record.id}
+                          onClick={() => setIdsToDelete([record.id])}
                           className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
                           title="Eliminar este registro"
                         >
@@ -254,38 +356,39 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         </div>
       </div>
 
-      {/* Delete Confirmation Modal */}
-      {recordToDelete && (
+      {/* Delete Confirmation Modal (Single or Bulk) */}
+      {idsToDelete.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl p-6 max-w-sm w-full border border-slate-200 shadow-xl space-y-4">
             <div className="flex items-center space-x-3 text-rose-600">
               <div className="p-2 bg-rose-100 rounded-lg">
-                <Trash2 className="w-6 h-6" />
+                <AlertTriangle className="w-6 h-6" />
               </div>
-              <h3 className="font-bold text-slate-900 text-lg">¿Eliminar registro?</h3>
+              <h3 className="font-bold text-slate-900 text-lg">
+                {idsToDelete.length === 1 ? '¿Eliminar registro?' : `¿Eliminar ${idsToDelete.length} registros?`}
+              </h3>
             </div>
-            <div className="text-sm text-slate-600 space-y-1">
-              <p>Esta acción no se puede deshacer.</p>
-              <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-xs font-mono">
-                <div>ID: {recordToDelete.id}</div>
-                <div>Sistema: {recordToDelete.systemName}</div>
-                <div>Tiempo Total: {recordToDelete.totalSystemTimeSeconds.toFixed(2)}s</div>
-              </div>
-            </div>
+            <p className="text-sm text-slate-600">
+              {idsToDelete.length === 1
+                ? 'Esta acción no se puede deshacer y se removerá la muestra de la base de datos.'
+                : `Se eliminarán definitivamente ${idsToDelete.length} muestras seleccionadas de la base de datos.`}
+            </p>
             <div className="flex items-center justify-end space-x-2 pt-2">
               <button
                 type="button"
-                onClick={() => setRecordToDelete(null)}
+                disabled={isDeleting}
+                onClick={() => setIdsToDelete([])}
                 className="px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg"
               >
                 Cancelar
               </button>
               <button
                 type="button"
+                disabled={isDeleting}
                 onClick={handleConfirmDelete}
-                className="px-4 py-2 text-sm font-medium bg-rose-600 hover:bg-rose-700 text-white rounded-lg shadow-sm"
+                className="px-4 py-2 text-sm font-medium bg-rose-600 hover:bg-rose-700 text-white rounded-lg shadow-sm disabled:opacity-50"
               >
-                Eliminar definitivamente
+                {isDeleting ? 'Eliminando...' : idsToDelete.length === 1 ? 'Sí, eliminar' : `Eliminar ${idsToDelete.length}`}
               </button>
             </div>
           </div>

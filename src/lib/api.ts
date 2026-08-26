@@ -238,19 +238,25 @@ export const ApiClient = {
   },
 
   async deleteRecord(id: string): Promise<boolean> {
+    return this.deleteRecords([id]);
+  },
+
+  async deleteRecords(ids: string[]): Promise<boolean> {
+    if (!ids || ids.length === 0) return true;
+
     const client = getSupabaseClient();
     if (client) {
       try {
-        const { error } = await client.from('records').delete().eq('id', id);
+        const { error } = await client.from('records').delete().in('id', ids);
         if (error) {
-          console.error('Error deleting record from Supabase:', error);
+          console.error('Error deleting records from Supabase:', error);
         }
       } catch (e) {
-        console.error('Error deleting record from Supabase:', e);
+        console.error('Error deleting records from Supabase:', e);
       }
     }
 
-    LocalStore.deleteRecord(id);
+    LocalStore.deleteRecords(ids);
     return true;
   },
 

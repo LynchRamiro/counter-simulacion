@@ -124,10 +124,11 @@ export const App: React.FC = () => {
     return saved;
   };
 
-  // Handler: Delete Sample Record
-  const handleDeleteRecord = async (id: string) => {
-    await ApiClient.deleteRecord(id);
-    setRecords((prev) => prev.filter((r) => r.id !== id));
+  // Handler: Delete Sample Records (Single or Bulk)
+  const handleDeleteRecords = async (ids: string[]) => {
+    await ApiClient.deleteRecords(ids);
+    const idSet = new Set(ids);
+    setRecords((prev) => prev.filter((r) => !idSet.has(r.id)));
   };
 
   // Handler: Create System
@@ -192,7 +193,7 @@ export const App: React.FC = () => {
             records={records}
             systems={systems}
             users={users}
-            onDeleteRecord={handleDeleteRecord}
+            onDeleteRecords={handleDeleteRecords}
             onRefresh={loadAllData}
           />
         )}
