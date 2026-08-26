@@ -30,8 +30,3 @@ dist-ssr
 .env.local
 .env.production
 .env.development
-
-# Database local storage
-data/
-backend/data/*.json
-!backend/data/.gitkeep
