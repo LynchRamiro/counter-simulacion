@@ -1,5 +1,5 @@
 import { UserProfile, SimulationSystem, SampleRecord, BackendStatus } from '../types';
-import { LocalStore } from './storage';
+import { LocalStore, normalizeCinemaRecord, CINEMA_SYSTEMS, DEFAULT_USERS } from './storage';
 import { getSupabaseClient } from './supabase';
 
 export const ApiClient = {
@@ -48,12 +48,20 @@ export const ApiClient = {
       try {
         const { data, error } = await client.from('users').select('*').order('id', { ascending: true });
         if (!error && data && data.length > 0) {
+          const hasGeneric = data.some((u: any) => typeof u.name === 'string' && u.name.startsWith('Usuario '));
+          if (hasGeneric) {
+            await this.updateUsers(DEFAULT_USERS);
+            return DEFAULT_USERS;
+          }
           const formatted: UserProfile[] = data.map((u: any) => ({
             id: u.id,
             name: u.name,
           }));
           LocalStore.saveUsers(formatted);
           return formatted;
+        } else if (!error && (!data || data.length === 0)) {
+          await this.updateUsers(DEFAULT_USERS);
+          return DEFAULT_USERS;
         }
       } catch (e) {
         console.error('Error fetching users from Supabase:', e);
@@ -88,7 +96,7 @@ export const ApiClient = {
           .from('systems')
           .select('*')
           .order('created_at', { ascending: true });
-        if (!error && data) {
+        if (!error && data && data.length > 0) {
           const formatted: SimulationSystem[] = data.map((s: any) => ({
             id: s.id,
             name: s.name,
@@ -103,7 +111,7 @@ export const ApiClient = {
         console.error('Error fetching systems from Supabase:', e);
       }
     }
-    return LocalStore.getSystems();
+    return CINEMA_SYSTEMS;
   },
 
   async createSystem(system: {
@@ -176,17 +184,19 @@ export const ApiClient = {
 
         const { data, error } = await query;
         if (!error && data) {
-          const formatted: SampleRecord[] = data.map((r: any) => ({
-            id: r.id,
-            systemId: r.system_id,
-            systemName: r.system_name,
-            userId: r.user_id,
-            userName: r.user_name,
-            timestamp: r.timestamp,
-            processTimes: r.process_times || [],
-            totalSystemTimeSeconds: Number(r.total_system_time_seconds),
-            notes: r.notes || '',
-          }));
+          const formatted: SampleRecord[] = data.map((r: any) =>
+            normalizeCinemaRecord({
+              id: r.id,
+              systemId: r.system_id,
+              systemName: r.system_name,
+              userId: r.user_id,
+              userName: r.user_name,
+              timestamp: r.timestamp,
+              processTimes: r.process_times || [],
+              totalSystemTimeSeconds: Number(r.total_system_time_seconds),
+              notes: r.notes || '',
+            })
+          );
 
           if (!systemId || systemId === 'ALL') {
             LocalStore.saveRecords(formatted);
@@ -205,15 +215,20 @@ export const ApiClient = {
   },
 
   async createRecord(record: Omit<SampleRecord, 'id'>): Promise<SampleRecord> {
-    const newRecord: SampleRecord = {
+    const normalizedDraft = normalizeCinemaRecord({
       ...record,
       id: `rec-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       timestamp: record.timestamp || new Date().toISOString(),
-    };
+    });
+
+    const newRecord: SampleRecord = normalizedDraft;
 
     const client = getSupabaseClient();
     if (client) {
       try {
+        const opLabel = newRecord.operationType === 'adquisicion' ? 'Adquisición de entradas' : 'Retiro de entradas (App Web)';
+        const notesToSave = newRecord.notes ? `${opLabel} - ${newRecord.notes}` : opLabel;
+
         const { error } = await client.from('records').insert({
           id: newRecord.id,
           system_id: newRecord.systemId,
@@ -223,7 +238,7 @@ export const ApiClient = {
           timestamp: newRecord.timestamp,
           process_times: newRecord.processTimes,
           total_system_time_seconds: newRecord.totalSystemTimeSeconds,
-          notes: newRecord.notes || '',
+          notes: notesToSave,
         });
         if (error) {
           console.error('Error inserting record into Supabase:', error);
@@ -280,17 +295,19 @@ export const ApiClient = {
         (payload) => {
           const r: any = payload.new;
           if (r && r.id) {
-            onRecordInsert({
-              id: r.id,
-              systemId: r.system_id,
-              systemName: r.system_name,
-              userId: r.user_id,
-              userName: r.user_name,
-              timestamp: r.timestamp,
-              processTimes: r.process_times || [],
-              totalSystemTimeSeconds: Number(r.total_system_time_seconds),
-              notes: r.notes || '',
-            });
+            onRecordInsert(
+              normalizeCinemaRecord({
+                id: r.id,
+                systemId: r.system_id,
+                systemName: r.system_name,
+                userId: r.user_id,
+                userName: r.user_name,
+                timestamp: r.timestamp,
+                processTimes: r.process_times || [],
+                totalSystemTimeSeconds: Number(r.total_system_time_seconds),
+                notes: r.notes || '',
+              })
+            );
           }
         }
       )

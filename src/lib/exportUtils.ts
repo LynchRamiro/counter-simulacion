@@ -1,53 +1,69 @@
 import { SampleRecord } from '../types';
 import { formatDateTime } from './formatters';
 
-export function exportRecordsToCSV(records: SampleRecord[], systemName?: string) {
+export function exportRecordsToCSV(records: SampleRecord[], filterTitle?: string) {
   if (!records || records.length === 0) {
     alert('No hay registros para exportar.');
     return;
   }
 
-  // Find all unique process names across records for headers
-  const processNamesSet = new Set<string>();
-  records.forEach((r) => {
-    r.processTimes.forEach((pt) => {
-      processNamesSet.add(pt.processName);
-    });
-  });
-  const processNames = Array.from(processNamesSet);
-
-  // Build CSV Header
+  // Build CSV Header (Ideal para Simulación: Wq, Ws, W total)
   const headers = [
     'ID Muestra',
     'Fecha y Hora',
-    'Sistema',
-    'Usuario ID',
-    'Usuario Nombre',
-    ...processNames.map((name) => `Tiempo: ${name} (seg)`),
-    'Tiempo Total Sistema (seg)',
-    'Tiempo Total Sistema (mm:ss)',
+    'Cola de Origen',
+    'Servidor de Atencion',
+    'Tipo de Tramite',
+    'Tiempo en Cola Wq (seg)',
+    'Tiempo en Cola Wq (mm:ss)',
+    'Tiempo de Atencion Ws (seg)',
+    'Tiempo de Atencion Ws (mm:ss)',
+    'Tiempo Total Sistema W (seg)',
+    'Tiempo Total Sistema W (mm:ss)',
+    'Operador ID',
+    'Operador Nombre',
+    'Notas',
   ];
+
+  const formatMinSec = (totalSecs: number) => {
+    const mins = Math.floor(totalSecs / 60);
+    const secs = (totalSecs % 60).toFixed(2);
+    return `${mins}:${Number(secs) < 10 ? '0' : ''}${secs}`;
+  };
 
   // Build CSV Rows
   const rows = records.map((record) => {
-    const processDurations = processNames.map((pName) => {
-      const found = record.processTimes.find((pt) => pt.processName === pName);
-      return found ? found.durationSeconds.toFixed(2) : 'N/A';
-    });
+    const queueLabel =
+      record.queueType === 'totem' || record.systemName.toLowerCase().includes('totem')
+        ? 'Cola Totem'
+        : 'Cola Cajero';
 
-    const mins = Math.floor(record.totalSystemTimeSeconds / 60);
-    const secs = (record.totalSystemTimeSeconds % 60).toFixed(2);
-    const formattedTotal = `${mins}:${Number(secs) < 10 ? '0' : ''}${secs}`;
+    const serverLabel = record.serverName || (record.queueType === 'totem' ? 'Totem Autoservicio' : 'Cajero 1');
+
+    const operationLabel =
+      record.operationType === 'adquisicion'
+        ? 'Compra de entradas'
+        : 'Retiro de entradas (App Web)';
+
+    const queueWait = record.queueWaitTimeSeconds ?? 0;
+    const serviceTime = record.serviceTimeSeconds ?? record.totalSystemTimeSeconds;
+    const totalTime = record.totalSystemTimeSeconds;
 
     return [
       `"${record.id}"`,
       `"${formatDateTime(record.timestamp)}"`,
-      `"${record.systemName.replace(/"/g, '""')}"`,
+      `"${queueLabel}"`,
+      `"${serverLabel}"`,
+      `"${operationLabel}"`,
+      queueWait.toFixed(2),
+      `"${formatMinSec(queueWait)}"`,
+      serviceTime.toFixed(2),
+      `"${formatMinSec(serviceTime)}"`,
+      totalTime.toFixed(2),
+      `"${formatMinSec(totalTime)}"`,
       record.userId,
       `"${record.userName.replace(/"/g, '""')}"`,
-      ...processDurations,
-      record.totalSystemTimeSeconds.toFixed(2),
-      `"${formattedTotal}"`,
+      `"${(record.notes || '').replace(/"/g, '""')}"`,
     ];
   });
 
@@ -57,9 +73,9 @@ export function exportRecordsToCSV(records: SampleRecord[], systemName?: string)
   const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
-  const sanitizedSysName = (systemName || 'Todos_Los_Sistemas').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const sanitizedTitle = (filterTitle || 'Muestras_Cine').replace(/[^a-zA-Z0-9_-]/g, '_');
   link.setAttribute('href', url);
-  link.setAttribute('download', `muestras_simulacion_${sanitizedSysName}_${new Date().toISOString().slice(0, 10)}.csv`);
+  link.setAttribute('download', `simulacion_cine_${sanitizedTitle}_${new Date().toISOString().slice(0, 10)}.csv`);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

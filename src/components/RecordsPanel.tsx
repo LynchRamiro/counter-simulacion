@@ -1,12 +1,26 @@
 import React, { useState, useMemo } from 'react';
-import { Download, Trash2, Filter, RefreshCw, ClipboardList, Clock, CheckSquare, Square, MinusSquare, AlertTriangle } from 'lucide-react';
-import { SampleRecord, SimulationSystem, UserProfile } from '../types';
+import {
+  Download,
+  Trash2,
+  Filter,
+  RefreshCw,
+  ClipboardList,
+  Clock,
+  CheckSquare,
+  Square,
+  MinusSquare,
+  AlertTriangle,
+  Monitor,
+  Ticket,
+  Percent,
+  Search
+} from 'lucide-react';
+import { SampleRecord, UserProfile, QueueType } from '../types';
 import { formatDateTime, formatDuration } from '../lib/formatters';
 import { exportRecordsToCSV } from '../lib/exportUtils';
 
 interface RecordsPanelProps {
   records: SampleRecord[];
-  systems: SimulationSystem[];
   users: UserProfile[];
   onDeleteRecords: (ids: string[]) => Promise<void>;
   onRefresh: () => Promise<void>;
@@ -14,13 +28,16 @@ interface RecordsPanelProps {
 
 export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   records,
-  systems,
   users,
   onDeleteRecords,
   onRefresh,
 }) => {
-  const [selectedSystemFilter, setSelectedSystemFilter] = useState<string>('ALL');
+  // Filters
+  const [selectedQueueFilter, setSelectedQueueFilter] = useState<string>('ALL'); // 'ALL' | 'totem' | 'personalizada'
+  const [selectedServerFilter, setSelectedServerFilter] = useState<string>('ALL'); // 'ALL' | 'totem' | 'cajero-1' | 'cajero-2'
+  const [selectedOpFilter, setSelectedOpFilter] = useState<string>('ALL'); // 'ALL' | 'adquisicion' | 'retiro_web'
   const [selectedUserFilter, setSelectedUserFilter] = useState<string>('ALL');
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Multi-selection state
@@ -31,30 +48,82 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   // Filtered records
   const filteredRecords = useMemo(() => {
     return records.filter((r) => {
-      if (selectedSystemFilter !== 'ALL' && r.systemId !== selectedSystemFilter) {
+      const isTotem = r.queueType === 'totem' || r.systemName.toLowerCase().includes('totem');
+      const queueType: QueueType = isTotem ? 'totem' : 'personalizada';
+
+      if (selectedQueueFilter !== 'ALL' && queueType !== selectedQueueFilter) {
         return false;
       }
+
+      if (selectedServerFilter !== 'ALL') {
+        const srv = (r.serverName || '').toLowerCase();
+        if (selectedServerFilter === 'totem' && !srv.includes('totem')) return false;
+        if (selectedServerFilter === 'cajero-1' && !srv.includes('1')) return false;
+        if (selectedServerFilter === 'cajero-2' && !srv.includes('2')) return false;
+      }
+
+      if (selectedOpFilter !== 'ALL' && r.operationType !== selectedOpFilter) {
+        return false;
+      }
+
       if (selectedUserFilter !== 'ALL' && String(r.userId) !== selectedUserFilter) {
         return false;
       }
+
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        const notesMatch = (r.notes || '').toLowerCase().includes(query);
+        const userMatch = r.userName.toLowerCase().includes(query);
+        const idMatch = r.id.toLowerCase().includes(query);
+        const srvMatch = (r.serverName || '').toLowerCase().includes(query);
+        if (!notesMatch && !userMatch && !idMatch && !srvMatch) return false;
+      }
+
       return true;
     });
-  }, [records, selectedSystemFilter, selectedUserFilter]);
+  }, [records, selectedQueueFilter, selectedServerFilter, selectedOpFilter, selectedUserFilter, searchQuery]);
 
-  // Find system object to get headers
-  const currentFilteredSystem = systems.find((s) => s.id === selectedSystemFilter);
+  // Key KPI Metrics for Queue Theory & Simulation
+  const metrics = useMemo(() => {
+    const total = records.length;
+    const totem = records.filter((r) => r.queueType === 'totem' || r.systemName.toLowerCase().includes('totem'));
+    const pers = records.filter((r) => r.queueType === 'personalizada' || !r.systemName.toLowerCase().includes('totem'));
+    const persAdq = pers.filter((r) => r.operationType === 'adquisicion');
+    const persRet = pers.filter((r) => r.operationType === 'retiro_web');
 
-  // Dynamic process columns based on filtered system or union of processes
-  const processColumns = useMemo(() => {
-    if (currentFilteredSystem && currentFilteredSystem.processes) {
-      return currentFilteredSystem.processes.map((p) => p.name);
-    }
-    const set = new Set<string>();
-    filteredRecords.forEach((r) => {
-      r.processTimes.forEach((pt) => set.add(pt.processName));
-    });
-    return Array.from(set);
-  }, [currentFilteredSystem, filteredRecords]);
+    // Tiempos medios de espera en cola (Wq)
+    const avgTotemWq = totem.length > 0 ? totem.reduce((acc, r) => acc + (r.queueWaitTimeSeconds || 0), 0) / totem.length : 0;
+    const avgPersWq = pers.length > 0 ? pers.reduce((acc, r) => acc + (r.queueWaitTimeSeconds || 0), 0) / pers.length : 0;
+
+    // Tiempos medios de atención / servicio (Ws)
+    const avgTotemWs = totem.length > 0 ? totem.reduce((acc, r) => acc + (r.serviceTimeSeconds ?? r.totalSystemTimeSeconds), 0) / totem.length : 0;
+    const avgPersAdqWs = persAdq.length > 0 ? persAdq.reduce((acc, r) => acc + (r.serviceTimeSeconds ?? r.totalSystemTimeSeconds), 0) / persAdq.length : 0;
+    const avgPersRetWs = persRet.length > 0 ? persRet.reduce((acc, r) => acc + (r.serviceTimeSeconds ?? r.totalSystemTimeSeconds), 0) / persRet.length : 0;
+
+    // Tiempo medio total en el sistema (W = Wq + Ws)
+    const avgTotemW = totem.length > 0 ? totem.reduce((acc, r) => acc + r.totalSystemTimeSeconds, 0) / totem.length : 0;
+    const avgPersW = pers.length > 0 ? pers.reduce((acc, r) => acc + r.totalSystemTimeSeconds, 0) / pers.length : 0;
+
+    const pctAdq = pers.length > 0 ? (persAdq.length / pers.length) * 100 : 0;
+    const pctRet = pers.length > 0 ? (persRet.length / pers.length) * 100 : 0;
+
+    return {
+      total,
+      totemCount: totem.length,
+      avgTotemWq,
+      avgTotemWs,
+      avgTotemW,
+      persCount: pers.length,
+      avgPersWq,
+      avgPersW,
+      persAdqCount: persAdq.length,
+      avgPersAdqWs,
+      pctAdq,
+      persRetCount: persRet.length,
+      avgPersRetWs,
+      pctRet,
+    };
+  }, [records]);
 
   // Selection helpers
   const allFilteredSelected = filteredRecords.length > 0 && filteredRecords.every((r) => selectedIds.has(r.id));
@@ -62,12 +131,10 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
 
   const handleToggleSelectAll = () => {
     if (allFilteredSelected) {
-      // Unselect all currently filtered
       const next = new Set(selectedIds);
       filteredRecords.forEach((r) => next.delete(r.id));
       setSelectedIds(next);
     } else {
-      // Select all currently filtered
       const next = new Set(selectedIds);
       filteredRecords.forEach((r) => next.add(r.id));
       setSelectedIds(next);
@@ -76,11 +143,8 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
 
   const handleToggleRow = (id: string) => {
     const next = new Set(selectedIds);
-    if (next.has(id)) {
-      next.delete(id);
-    } else {
-      next.add(id);
-    }
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
     setSelectedIds(next);
   };
 
@@ -94,7 +158,6 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
     if (idsToDelete.length === 0) return;
     setIsDeleting(true);
     await onDeleteRecords(idsToDelete);
-    // Clear selection for deleted IDs
     const next = new Set(selectedIds);
     idsToDelete.forEach((id) => next.delete(id));
     setSelectedIds(next);
@@ -103,62 +166,175 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
   };
 
   const handleExport = () => {
-    // If some records are selected, export selected; otherwise export all filtered
     const toExport = selectedIds.size > 0
       ? filteredRecords.filter((r) => selectedIds.has(r.id))
       : filteredRecords;
-    exportRecordsToCSV(toExport, currentFilteredSystem?.name);
+
+    let filterTag = 'Muestras';
+    if (selectedQueueFilter === 'totem') filterTag += '_Totem';
+    if (selectedQueueFilter === 'personalizada') filterTag += '_Cajeros';
+    if (selectedOpFilter === 'adquisicion') filterTag += '_Compra';
+    if (selectedOpFilter === 'retiro_web') filterTag += '_RetiroWeb';
+
+    exportRecordsToCSV(toExport, filterTag);
   };
 
   return (
-    <div className="space-y-4 max-w-7xl mx-auto">
+    <div className="space-y-5 max-w-7xl mx-auto pb-12">
+      {/* Simulation KPI Summary Cards (Wq, Ws, W) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* KPI 1: Total Muestras */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs">
+          <div className="flex items-center justify-between text-slate-500 mb-2">
+            <span className="text-xs font-bold uppercase tracking-wider">Total de Muestras</span>
+            <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+              <ClipboardList className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="text-2xl sm:text-3xl font-extrabold text-slate-900 font-mono-numbers">
+            {metrics.total}
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            {metrics.totemCount} Tótem + {metrics.persCount} Cajeros
+          </div>
+        </div>
+
+        {/* KPI 2: Tótem Autoservicio (Wq y Ws) */}
+        <div className="bg-white rounded-2xl border border-indigo-200/80 p-4 shadow-2xs">
+          <div className="flex items-center justify-between text-indigo-700 mb-1.5">
+            <span className="text-xs font-bold uppercase tracking-wider flex items-center space-x-1">
+              <Monitor className="w-3.5 h-3.5" />
+              <span>Tótem Autoservicio</span>
+            </span>
+            <span className="text-xs font-bold font-mono px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200">
+              {metrics.totemCount} mues.
+            </span>
+          </div>
+          <div className="text-lg font-black text-indigo-950 font-mono-numbers">
+            Espera Wq: {metrics.avgTotemWq.toFixed(1)}s
+          </div>
+          <div className="text-xs text-indigo-700 mt-0.5 font-medium">
+            Atención Ws: <strong className="font-mono">{metrics.avgTotemWs.toFixed(1)}s</strong> | Total W: <strong className="font-mono">{metrics.avgTotemW.toFixed(1)}s</strong>
+          </div>
+        </div>
+
+        {/* KPI 3: Cajeros - Compra de Entradas */}
+        <div className="bg-white rounded-2xl border border-emerald-200/80 p-4 shadow-2xs">
+          <div className="flex items-center justify-between text-emerald-700 mb-1.5">
+            <span className="text-xs font-bold uppercase tracking-wider flex items-center space-x-1">
+              <Ticket className="w-3.5 h-3.5" />
+              <span>Cajeros: Compra</span>
+            </span>
+            <span className="text-xs font-bold font-mono px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200">
+              {metrics.persAdqCount} ({metrics.pctAdq.toFixed(0)}%)
+            </span>
+          </div>
+          <div className="text-lg font-black text-emerald-950 font-mono-numbers">
+            Atención Ws: {metrics.avgPersAdqWs.toFixed(1)}s
+          </div>
+          <div className="text-xs text-emerald-700 mt-0.5 font-medium">
+            Espera media en cola: <strong className="font-mono">{metrics.avgPersWq.toFixed(1)}s</strong>
+          </div>
+        </div>
+
+        {/* KPI 4: Cajeros - Retiro Web */}
+        <div className="bg-white rounded-2xl border border-amber-200/80 p-4 shadow-2xs">
+          <div className="flex items-center justify-between text-amber-700 mb-1.5">
+            <span className="text-xs font-bold uppercase tracking-wider flex items-center space-x-1">
+              <Percent className="w-3.5 h-3.5" />
+              <span>Cajeros: Retiro Web</span>
+            </span>
+            <span className="text-xs font-bold font-mono px-2 py-0.5 rounded-full bg-amber-50 border border-amber-200">
+              {metrics.persRetCount} ({metrics.pctRet.toFixed(0)}%)
+            </span>
+          </div>
+          <div className="text-lg font-black text-amber-950 font-mono-numbers">
+            Atención Ws: {metrics.avgPersRetWs.toFixed(1)}s
+          </div>
+          <div className="text-xs text-amber-700 mt-0.5 font-medium">
+            Espera media en cola: <strong className="font-mono">{metrics.avgPersWq.toFixed(1)}s</strong>
+          </div>
+        </div>
+      </div>
+
       {/* Header with Filters & Actions */}
-      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-        {/* Filters */}
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center space-x-2 text-xs font-semibold text-slate-500 uppercase">
-            <Filter className="w-4 h-4 text-slate-400" />
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3">
+        {/* Filter Controls */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex items-center space-x-1.5 text-xs font-bold text-slate-500 uppercase mr-1">
+            <Filter className="w-3.5 h-3.5 text-slate-400" />
             <span>Filtros:</span>
           </div>
 
-          {/* System Filter */}
+          {/* Queue Filter */}
           <select
-            value={selectedSystemFilter}
-            onChange={(e) => setSelectedSystemFilter(e.target.value)}
-            className="bg-slate-50 border border-slate-300 text-slate-800 text-sm font-medium rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 cursor-pointer"
+            value={selectedQueueFilter}
+            onChange={(e) => setSelectedQueueFilter(e.target.value)}
+            className="bg-slate-50 border border-slate-300 text-slate-800 text-xs font-semibold rounded-xl px-3 py-2 focus:ring-2 focus:ring-blue-500 cursor-pointer"
           >
-            <option value="ALL">Todos los Sistemas ({systems.length})</option>
-            {systems.map((sys) => (
-              <option key={sys.id} value={sys.id}>
-                {sys.name}
-              </option>
-            ))}
+            <option value="ALL">Todas las Colas</option>
+            <option value="totem">Cola Tótem</option>
+            <option value="personalizada">Cola Cajero</option>
+          </select>
+
+          {/* Server Filter */}
+          <select
+            value={selectedServerFilter}
+            onChange={(e) => setSelectedServerFilter(e.target.value)}
+            className="bg-slate-50 border border-slate-300 text-slate-800 text-xs font-semibold rounded-xl px-3 py-2 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+          >
+            <option value="ALL">Todos los Servidores</option>
+            <option value="totem">Tótem Autoservicio</option>
+            <option value="cajero-1">Cajero 1</option>
+            <option value="cajero-2">Cajero 2</option>
+          </select>
+
+          {/* Operation Filter */}
+          <select
+            value={selectedOpFilter}
+            onChange={(e) => setSelectedOpFilter(e.target.value)}
+            className="bg-slate-50 border border-slate-300 text-slate-800 text-xs font-semibold rounded-xl px-3 py-2 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+          >
+            <option value="ALL">Todos los Trámites</option>
+            <option value="adquisicion">💳 Compra de entradas</option>
+            <option value="retiro_web">📱 Retiro Web</option>
           </select>
 
           {/* User Filter */}
           <select
             value={selectedUserFilter}
             onChange={(e) => setSelectedUserFilter(e.target.value)}
-            className="bg-slate-50 border border-slate-300 text-slate-800 text-sm font-medium rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 cursor-pointer"
+            className="bg-slate-50 border border-slate-300 text-slate-800 text-xs font-semibold rounded-xl px-3 py-2 focus:ring-2 focus:ring-blue-500 cursor-pointer"
           >
-            <option value="ALL">Todos los Usuarios</option>
+            <option value="ALL">Todos los Operadores</option>
             {users.map((u) => (
               <option key={u.id} value={String(u.id)}>
                 {u.name} (Usuario {u.id})
               </option>
             ))}
           </select>
+
+          {/* Search Box */}
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+            <input
+              type="text"
+              placeholder="Buscar notas, ID..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-blue-500 text-slate-800 placeholder:text-slate-400"
+            />
+          </div>
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center space-x-2 shrink-0">
-          {/* Bulk Delete Button when items are selected */}
+        <div className="flex items-center space-x-2 shrink-0 self-end xl:self-auto">
           {selectedIds.size > 0 && (
             <button
               onClick={() => setIdsToDelete(Array.from(selectedIds))}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold shadow-sm transition-all animate-in fade-in"
+              className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-xs transition-all animate-in fade-in"
             >
-              <Trash2 className="w-4 h-4" />
+              <Trash2 className="w-3.5 h-3.5" />
               <span>Eliminar ({selectedIds.size})</span>
             </button>
           )}
@@ -166,19 +342,19 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
           <button
             onClick={handleRefreshClick}
             disabled={isRefreshing}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 text-sm font-medium transition-colors"
+            className="flex items-center space-x-1.5 px-3 py-2 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold transition-colors"
             title="Recargar datos del servidor"
           >
-            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-blue-600' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-blue-600' : ''}`} />
             <span className="hidden sm:inline">Actualizar</span>
           </button>
 
           <button
             onClick={handleExport}
             disabled={filteredRecords.length === 0}
-            className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Download className="w-4 h-4" />
+            <Download className="w-3.5 h-3.5" />
             <span>
               {selectedIds.size > 0 ? `Exportar (${selectedIds.size}) CSV` : 'Exportar CSV'}
             </span>
@@ -186,7 +362,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         </div>
       </div>
 
-      {/* Bulk selection info banner if items selected */}
+      {/* Multi-selection info bar */}
       {selectedIds.size > 0 && (
         <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-blue-900 animate-in fade-in">
           <div className="flex items-center space-x-2">
@@ -195,7 +371,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
           </div>
           <button
             onClick={() => setSelectedIds(new Set())}
-            className="font-semibold text-blue-700 hover:text-blue-900 underline"
+            className="font-bold text-blue-700 hover:text-blue-900 underline"
           >
             Deseleccionar todo
           </button>
@@ -203,24 +379,23 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
       )}
 
       {/* Main Records Table Card */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         {filteredRecords.length === 0 ? (
           <div className="p-12 text-center space-y-3">
-            <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
+            <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
               <ClipboardList className="w-6 h-6" />
             </div>
-            <h3 className="text-base font-bold text-slate-800">No hay muestras registradas</h3>
+            <h3 className="text-base font-bold text-slate-800">No hay muestras para este filtro</h3>
             <p className="text-xs text-slate-500 max-w-sm mx-auto">
-              Inicia el cronómetro en la pestaña principal para registrar tiempos de cada proceso y sistema.
+              Inicia los cronómetros en la pestaña principal para registrar tiempos de cola y atención.
             </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-sm">
               <thead>
-                <tr className="bg-slate-100/90 text-slate-600 text-xs font-bold uppercase tracking-wider border-b border-slate-200">
-                  {/* Select All Checkbox */}
-                  <th className="py-3 px-3 w-10 text-center">
+                <tr className="bg-slate-50 text-slate-600 text-xs font-bold uppercase tracking-wider border-b border-slate-200">
+                  <th className="py-3.5 px-3 w-10 text-center">
                     <button
                       type="button"
                       onClick={handleToggleSelectAll}
@@ -236,30 +411,34 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                       )}
                     </button>
                   </th>
-                  <th className="py-3 px-3"># / ID</th>
-                  <th className="py-3 px-4">Fecha y Hora</th>
-                  <th className="py-3 px-4">Sistema</th>
-                  <th className="py-3 px-4">Usuario</th>
-                  {processColumns.map((colName, idx) => (
-                    <th key={idx} className="py-3 px-4">
-                      {colName}
-                    </th>
-                  ))}
-                  <th className="py-3 px-4 text-right">Tiempo Total</th>
-                  <th className="py-3 px-4 text-center">Acciones</th>
+                  <th className="py-3.5 px-3">#</th>
+                  <th className="py-3.5 px-4">Fecha y Hora</th>
+                  <th className="py-3.5 px-4">Cola</th>
+                  <th className="py-3.5 px-4">Servidor</th>
+                  <th className="py-3.5 px-4">Tipo de Trámite</th>
+                  <th className="py-3.5 px-3 text-right">Cola (Wq)</th>
+                  <th className="py-3.5 px-3 text-right">Atención (Ws)</th>
+                  <th className="py-3.5 px-4 text-right">Total (W)</th>
+                  <th className="py-3.5 px-4">Operador</th>
+                  <th className="py-3.5 px-4 text-center">Acciones</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 text-slate-800">
+              <tbody className="divide-y divide-slate-100 text-slate-800 text-xs sm:text-sm">
                 {filteredRecords.map((record, index) => {
                   const isSelected = selectedIds.has(record.id);
+                  const isTotem = record.queueType === 'totem' || record.systemName.toLowerCase().includes('totem');
+                  const isAdquisicion = record.operationType === 'adquisicion';
+                  const wq = record.queueWaitTimeSeconds ?? 0;
+                  const ws = record.serviceTimeSeconds ?? record.totalSystemTimeSeconds;
+                  const wTotal = record.totalSystemTimeSeconds;
+
                   return (
                     <tr
                       key={record.id}
                       className={`transition-colors group ${
-                        isSelected ? 'bg-blue-50/70' : 'hover:bg-slate-50/80'
+                        isSelected ? 'bg-blue-50/70' : 'hover:bg-slate-50/70'
                       }`}
                     >
-                      {/* Checkbox */}
                       <td className="py-3 px-3 text-center">
                         <button
                           type="button"
@@ -274,57 +453,78 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                         </button>
                       </td>
 
-                      {/* ID / Row Number */}
-                      <td className="py-3 px-3 font-mono text-xs text-slate-500 font-semibold">
-                        <span className="text-slate-400 mr-1.5">{filteredRecords.length - index}.</span>
-                        <span title={record.id}>{record.id.slice(-7)}</span>
+                      <td className="py-3 px-3 font-mono text-xs text-slate-400 font-bold">
+                        {filteredRecords.length - index}
                       </td>
 
-                      {/* Date / Time */}
                       <td className="py-3 px-4 text-xs text-slate-600 whitespace-nowrap">
                         {formatDateTime(record.timestamp)}
                       </td>
 
-                      {/* System Name */}
-                      <td className="py-3 px-4 font-semibold text-slate-900 whitespace-nowrap">
-                        {record.systemName}
+                      {/* Cola */}
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        {isTotem ? (
+                          <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 font-bold text-xs border border-indigo-200">
+                            <Monitor className="w-3 h-3" />
+                            <span>Cola Tótem</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 font-bold text-xs border border-emerald-200">
+                            <Ticket className="w-3 h-3" />
+                            <span>Cola Cajero</span>
+                          </span>
+                        )}
                       </td>
 
-                      {/* User */}
+                      {/* Servidor */}
+                      <td className="py-3 px-4 whitespace-nowrap font-bold text-xs text-slate-800">
+                        {record.serverName || (isTotem ? 'Tótem Autoservicio' : 'Cajero 1')}
+                      </td>
+
+                      {/* Trámite */}
                       <td className="py-3 px-4 whitespace-nowrap">
-                        <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-800 text-xs font-medium border border-slate-200">
-                          <span className="w-1.5 h-1.5 rounded-full bg-blue-600" />
+                        {isAdquisicion ? (
+                          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-900 font-bold text-xs border border-emerald-300">
+                            <span>💳</span>
+                            <span>Compra</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-900 font-semibold text-xs border border-amber-200">
+                            <span>📱</span>
+                            <span>Retiro Web</span>
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Wq: Tiempo en cola */}
+                      <td className="py-3 px-3 text-right whitespace-nowrap font-mono text-xs text-slate-600">
+                        {wq > 0 ? `${wq.toFixed(2)}s` : <span className="text-slate-300 italic">0s (directo)</span>}
+                      </td>
+
+                      {/* Ws: Tiempo de atención */}
+                      <td className="py-3 px-3 text-right whitespace-nowrap font-mono text-xs font-bold text-slate-900">
+                        {ws.toFixed(2)}s
+                      </td>
+
+                      {/* W: Tiempo total en sistema */}
+                      <td className="py-3 px-4 text-right whitespace-nowrap">
+                        <div className="font-mono-numbers font-black text-indigo-700 text-xs sm:text-sm">
+                          {wTotal.toFixed(2)}s
+                        </div>
+                        <div className="font-mono text-[10px] text-slate-400">
+                          ({formatDuration(wTotal)})
+                        </div>
+                      </td>
+
+                      {/* Operador */}
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        <span className="inline-flex items-center space-x-1.5 px-2 py-0.5 rounded-full bg-slate-100 text-slate-800 text-xs font-medium border border-slate-200">
+                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-600" />
                           <span>{record.userName}</span>
                         </span>
                       </td>
 
-                      {/* Process Times */}
-                      {processColumns.map((colName, idx) => {
-                        const match = record.processTimes.find((pt) => pt.processName === colName);
-                        return (
-                          <td key={idx} className="py-3 px-4 font-mono-numbers text-xs">
-                            {match ? (
-                              <span className="font-semibold text-slate-700 bg-slate-50 px-2 py-1 rounded border border-slate-200 inline-block">
-                                {match.durationSeconds.toFixed(2)}s
-                              </span>
-                            ) : (
-                              <span className="text-slate-400">-</span>
-                            )}
-                          </td>
-                        );
-                      })}
-
-                      {/* Total System Time */}
-                      <td className="py-3 px-4 text-right whitespace-nowrap">
-                        <div className="font-mono-numbers font-extrabold text-blue-700 text-sm">
-                          {record.totalSystemTimeSeconds.toFixed(2)}s
-                        </div>
-                        <div className="font-mono text-[11px] text-slate-400">
-                          ({formatDuration(record.totalSystemTimeSeconds)})
-                        </div>
-                      </td>
-
-                      {/* Delete action (Single) */}
+                      {/* Eliminar */}
                       <td className="py-3 px-4 text-center">
                         <button
                           onClick={() => setIdsToDelete([record.id])}
@@ -343,29 +543,29 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
         )}
 
         {/* Footer Summary */}
-        <div className="bg-slate-50 px-4 py-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 font-medium">
+        <div className="bg-slate-50 px-4 py-3 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 font-medium gap-2">
           <div className="flex items-center space-x-1.5">
             <Clock className="w-4 h-4 text-slate-400" />
             <span>
-              Total de muestras visualizadas: <strong className="text-slate-800">{filteredRecords.length}</strong>
+              Muestras en vista: <strong className="text-slate-800">{filteredRecords.length}</strong> de {records.length}
             </span>
           </div>
-          <div>
-            Sincronización multiusuario activa
+          <div className="text-slate-400">
+            Wq (Espera) + Ws (Atención) = W (Tiempo en Sistema) — SimuTimer Cine
           </div>
         </div>
       </div>
 
-      {/* Delete Confirmation Modal (Single or Bulk) */}
+      {/* Delete Confirmation Modal */}
       {idsToDelete.length > 0 && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl p-6 max-w-sm w-full border border-slate-200 shadow-xl space-y-4">
             <div className="flex items-center space-x-3 text-rose-600">
-              <div className="p-2 bg-rose-100 rounded-lg">
+              <div className="p-2.5 bg-rose-100 rounded-xl">
                 <AlertTriangle className="w-6 h-6" />
               </div>
               <h3 className="font-bold text-slate-900 text-lg">
-                {idsToDelete.length === 1 ? '¿Eliminar registro?' : `¿Eliminar ${idsToDelete.length} registros?`}
+                {idsToDelete.length === 1 ? '¿Eliminar muestra?' : `¿Eliminar ${idsToDelete.length} muestras?`}
               </h3>
             </div>
             <p className="text-sm text-slate-600">
@@ -378,7 +578,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                 type="button"
                 disabled={isDeleting}
                 onClick={() => setIdsToDelete([])}
-                className="px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg"
+                className="px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-xl"
               >
                 Cancelar
               </button>
@@ -386,7 +586,7 @@ export const RecordsPanel: React.FC<RecordsPanelProps> = ({
                 type="button"
                 disabled={isDeleting}
                 onClick={handleConfirmDelete}
-                className="px-4 py-2 text-sm font-medium bg-rose-600 hover:bg-rose-700 text-white rounded-lg shadow-sm disabled:opacity-50"
+                className="px-4 py-2 text-sm font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-xs disabled:opacity-50"
               >
                 {isDeleting ? 'Eliminando...' : idsToDelete.length === 1 ? 'Sí, eliminar' : `Eliminar ${idsToDelete.length}`}
               </button>

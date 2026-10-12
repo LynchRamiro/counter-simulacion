@@ -8,12 +8,99 @@ const STORAGE_KEYS = {
 };
 
 export const DEFAULT_USERS: UserProfile[] = [
-  { id: 1, name: 'Usuario 1' },
-  { id: 2, name: 'Usuario 2' },
-  { id: 3, name: 'Usuario 3' },
-  { id: 4, name: 'Usuario 4' },
-  { id: 5, name: 'Usuario 5' },
+  { id: 1, name: 'Camila' },
+  { id: 2, name: 'Cecilia' },
+  { id: 3, name: 'Gianella' },
+  { id: 4, name: 'Ramiro' },
+  { id: 5, name: 'Valentino' },
 ];
+
+export const CINEMA_SYSTEMS: SimulationSystem[] = [
+  {
+    id: 'cine-totem',
+    name: 'Tótem de Autoservicio',
+    description: 'Cola 1: Sólo retiro de entradas adquiridas previamente por la app web',
+    processes: [
+      { id: 'proc-totem-retiro', order: 1, name: 'Retiro de entradas (App Web)' },
+    ],
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    id: 'cine-personalizada',
+    name: 'Atención Personalizada',
+    description: 'Cola 2: Boletería/Caja (Adquisición de entradas o Retiro app web)',
+    processes: [
+      { id: 'proc-pers-atencion', order: 1, name: 'Atención en Boletería' },
+    ],
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+];
+
+export const normalizeCinemaRecord = (record: SampleRecord): SampleRecord => {
+  const isTotem =
+    record.systemId === 'cine-totem' ||
+    record.systemName.toLowerCase().includes('totem');
+
+  const queueType = record.queueType || (isTotem ? 'totem' : 'personalizada');
+
+  let operationType = record.operationType;
+  if (!operationType) {
+    if (isTotem) {
+      operationType = 'retiro_web';
+    } else {
+      const notesLower = (record.notes || '').toLowerCase();
+      const procNameLower = (record.processTimes[0]?.processName || '').toLowerCase();
+      if (notesLower.includes('adquis') || notesLower.includes('compra') || procNameLower.includes('adquis') || procNameLower.includes('compra')) {
+        operationType = 'adquisicion';
+      } else {
+        operationType = 'retiro_web';
+      }
+    }
+  }
+
+  // Derive queueWaitTimeSeconds and serviceTimeSeconds
+  let queueWait = record.queueWaitTimeSeconds;
+  let serviceTime = record.serviceTimeSeconds;
+
+  if (queueWait === undefined || serviceTime === undefined) {
+    const queueProc = record.processTimes.find(p => p.processId.includes('cola') || p.processName.toLowerCase().includes('cola') || p.processName.toLowerCase().includes('espera'));
+    const servProc = record.processTimes.find(p => p.processId.includes('atencion') || p.processName.toLowerCase().includes('atencion') || p.processName.toLowerCase().includes('servicio') || p.processName.toLowerCase().includes('retiro') || p.processName.toLowerCase().includes('adquis'));
+
+    if (queueProc && servProc) {
+      queueWait = queueProc.durationSeconds;
+      serviceTime = servProc.durationSeconds;
+    } else {
+      queueWait = queueWait ?? 0;
+      serviceTime = serviceTime ?? record.totalSystemTimeSeconds;
+    }
+  }
+
+  let serverName = record.serverName;
+  if (!serverName) {
+    if (isTotem) {
+      serverName = 'Tótem Autoservicio';
+    } else {
+      const notesLower = (record.notes || '').toLowerCase();
+      if (notesLower.includes('cajero 2')) {
+        serverName = 'Cajero 2';
+      } else {
+        serverName = 'Cajero 1';
+      }
+    }
+  }
+
+  return {
+    ...record,
+    queueType,
+    operationType,
+    serverName,
+    queueWaitTimeSeconds: Number(queueWait.toFixed(2)),
+    serviceTimeSeconds: Number(serviceTime.toFixed(2)),
+    totalSystemTimeSeconds: Number((queueWait + serviceTime).toFixed(2)),
+    systemId: queueType === 'totem' ? 'cine-totem' : 'cine-personalizada',
+    systemName: queueType === 'totem' ? 'Tótem de Autoservicio' : 'Atención Personalizada',
+  };
+};
 
 export const LocalStore = {
   // Current User Session
@@ -36,11 +123,15 @@ export const LocalStore = {
       const raw = localStorage.getItem(STORAGE_KEYS.USERS);
       if (raw !== null) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const hasGeneric = parsed.some((u: any) => typeof u.name === 'string' && u.name.startsWith('Usuario '));
+          if (!hasGeneric) return parsed;
+        }
       }
     } catch (e) {
       console.error('Error reading users from localStorage:', e);
     }
+    this.saveUsers(DEFAULT_USERS);
     return DEFAULT_USERS;
   },
 
@@ -48,19 +139,18 @@ export const LocalStore = {
     localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   },
 
-  // Systems List
+  // Systems List (Cinema Dedicated)
   getSystems(): SimulationSystem[] {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.SYSTEMS);
       if (raw !== null) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed; // Allow empty array if user deleted all systems
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch (e) {
       console.error('Error reading systems from localStorage:', e);
     }
-    // Return empty list if nothing stored yet
-    return [];
+    return CINEMA_SYSTEMS;
   },
 
   saveSystems(systems: SimulationSystem[]) {
@@ -73,7 +163,9 @@ export const LocalStore = {
       const raw = localStorage.getItem(STORAGE_KEYS.RECORDS);
       if (raw !== null) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed.map(normalizeCinemaRecord);
+        }
       }
     } catch (e) {
       console.error('Error reading records from localStorage:', e);

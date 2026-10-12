@@ -2,23 +2,21 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Navbar } from './components/Navbar';
 import { TimerEngine } from './components/TimerEngine';
 import { RecordsPanel } from './components/RecordsPanel';
-import { SystemManager } from './components/SystemManager';
+import { CinemaSystemInfo } from './components/CinemaSystemInfo';
 import { UserSelectionModal } from './components/UserSelectionModal';
 import { UserSettingsModal } from './components/UserSettingsModal';
 import { BackendStatusModal } from './components/BackendStatusModal';
 import { ApiClient } from './lib/api';
 import { LocalStore } from './lib/storage';
-import { UserProfile, SimulationSystem, SampleRecord, BackendStatus } from './types';
+import { UserProfile, SampleRecord, BackendStatus } from './types';
 
 export const App: React.FC = () => {
-  // Navigation
-  const [activeTab, setActiveTab] = useState<'timer' | 'records' | 'systems'>('timer');
+  // Navigation: timer (Cronómetros), records (Registros), info (Modelo del Cine)
+  const [activeTab, setActiveTab] = useState<'timer' | 'records' | 'info'>('timer');
 
   // Application Data State
   const [users, setUsers] = useState<UserProfile[]>(LocalStore.getUsers());
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
-  const [systems, setSystems] = useState<SimulationSystem[]>(LocalStore.getSystems());
-  const [selectedSystemId, setSelectedSystemId] = useState<string>('');
   const [records, setRecords] = useState<SampleRecord[]>(LocalStore.getRecords());
 
   // Backend Health Status
@@ -59,14 +57,7 @@ export const App: React.FC = () => {
       setIsUserSelectOpen(true);
     }
 
-    // 2. Fetch Systems
-    const fetchedSystems = await ApiClient.getSystems();
-    setSystems(fetchedSystems);
-    if (fetchedSystems.length > 0) {
-      setSelectedSystemId((prev) => (prev && fetchedSystems.some((s) => s.id === prev) ? prev : fetchedSystems[0].id));
-    }
-
-    // 3. Fetch Records
+    // 2. Fetch Records
     const fetchedRecords = await ApiClient.getRecords();
     setRecords(fetchedRecords);
   }, []);
@@ -86,8 +77,7 @@ export const App: React.FC = () => {
         setRecords((prev) => prev.filter((r) => r.id !== deletedId));
       },
       async () => {
-        const updated = await ApiClient.getSystems();
-        setSystems(updated);
+        // Systems change (if any)
       },
       async () => {
         const updated = await ApiClient.getUsers();
@@ -131,35 +121,6 @@ export const App: React.FC = () => {
     setRecords((prev) => prev.filter((r) => !idSet.has(r.id)));
   };
 
-  // Handler: Create System
-  const handleCreateSystem = async (systemData: {
-    name: string;
-    description?: string;
-    processes: { name: string; order: number }[];
-  }) => {
-    const created = await ApiClient.createSystem(systemData);
-    setSystems((prev) => [...prev.filter((s) => s.id !== created.id), created]);
-    setSelectedSystemId(created.id);
-  };
-
-  // Handler: Delete System
-  const handleDeleteSystem = async (id: string) => {
-    await ApiClient.deleteSystem(id);
-    setSystems((prev) => {
-      const remaining = prev.filter((s) => s.id !== id);
-      if (selectedSystemId === id) {
-        setSelectedSystemId(remaining.length > 0 ? remaining[0].id : '');
-      }
-      return remaining;
-    });
-  };
-
-  // Handler: Select System and Jump to Timer
-  const handleSelectAndMeasure = (systemId: string) => {
-    setSelectedSystemId(systemId);
-    setActiveTab('timer');
-  };
-
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col text-slate-800">
       {/* Top Navigation */}
@@ -179,31 +140,25 @@ export const App: React.FC = () => {
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
         {activeTab === 'timer' && (
           <TimerEngine
-            systems={systems}
-            selectedSystemId={selectedSystemId}
-            onSelectSystemId={setSelectedSystemId}
             currentUser={currentUser}
             onSaveRecord={handleSaveRecord}
             onNavigateToRecords={() => setActiveTab('records')}
+            recentRecords={records}
           />
         )}
 
         {activeTab === 'records' && (
           <RecordsPanel
             records={records}
-            systems={systems}
             users={users}
             onDeleteRecords={handleDeleteRecords}
             onRefresh={loadAllData}
           />
         )}
 
-        {activeTab === 'systems' && (
-          <SystemManager
-            systems={systems}
-            onCreateSystem={handleCreateSystem}
-            onDeleteSystem={handleDeleteSystem}
-            onSelectAndMeasure={handleSelectAndMeasure}
+        {activeTab === 'info' && (
+          <CinemaSystemInfo
+            onGoToTimer={() => setActiveTab('timer')}
           />
         )}
       </main>
@@ -211,8 +166,12 @@ export const App: React.FC = () => {
       {/* Footer */}
       <footer className="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <div>SimuTimer — Medición de Tiempos en Sistemas de Colas & Procesos</div>
-          <div className="text-slate-400">Sincronización multiusuario en tiempo real</div>
+          <div>
+            <strong>SimuTimer Cine</strong> — Cola 1: Tótem (Retiro Web) & Cola 2: Atención Personalizada (Adquisición / Retiro)
+          </div>
+          <div className="text-slate-400">
+            Sincronización multiusuario en tiempo real (Supabase PostgreSQL)
+          </div>
         </div>
       </footer>
 

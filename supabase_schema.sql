@@ -9,14 +9,14 @@ create table if not exists public.users (
   name text not null
 );
 
--- Insertar los 5 usuarios iniciales si no existen
+-- Insertar los 5 usuarios del equipo
 insert into public.users (id, name) values
-  (1, 'Usuario 1'),
-  (2, 'Usuario 2'),
-  (3, 'Usuario 3'),
-  (4, 'Usuario 4'),
-  (5, 'Usuario 5')
-on conflict (id) do nothing;
+  (1, 'Camila'),
+  (2, 'Cecilia'),
+  (3, 'Gianella'),
+  (4, 'Ramiro'),
+  (5, 'Valentino')
+on conflict (id) do update set name = excluded.name;
 
 -- 2. TABLA DE SISTEMAS Y PROCESOS
 create table if not exists public.systems (
